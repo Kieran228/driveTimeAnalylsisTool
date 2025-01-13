@@ -1,3 +1,5 @@
+//! Added Checkmarks to indicate whether the drive time polygons are done generating.
+
 /** @jsx jsx */
 //#region Imports
 import { AllWidgetProps, css, jsx, React } from 'jimu-core';
@@ -15,16 +17,14 @@ import Polygon from '@arcgis/core/geometry/Polygon';
 //#endregion
 
 //#region Interfaces
-
 interface DriveTimeState {
   mapView?: JimuMapView;
   selectedTimes: { [key: number]: number };
-  isProcessing: { [key: number]: boolean };
+  isProcessing: boolean;
   errors: { [key: string]: string };
-  clickedPoints: { [key: number]: __esri.Point };
-  currentMarker: number;
+  clickedPoint?: __esri.Point;
+  completedPolygons: { [key: number]: boolean };
 }
-
 //#endregion
 
 //#region Widget Class
@@ -42,10 +42,9 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
         2: props.config?.defaultDriveTimes?.marker2 ?? 10,
         3: props.config?.defaultDriveTimes?.marker3 ?? 15
       },
-      isProcessing: {},
+      isProcessing: false,
       errors: {},
-      clickedPoints: {},
-      currentMarker: 1
+      completedPolygons: {}
     };
 
     // Set up ArcGIS authentication
@@ -59,8 +58,6 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
   //#endregion
 
   //#region Map Event Handlers
-
-  // Sets up the map when it's ready
   activeViewChangeHandler = (jmv: JimuMapView) => {
     if (jmv) {
       this.setState({ mapView: jmv }, () => {
@@ -72,29 +69,25 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
     }
   };
 
-  // Handles map clicks
-  //#endregion
-
-  //#region Event Handlers
   handleMapClick = (event: any) => {
-    if (event.mapPoint && this.state.currentMarker <= 3) {
-      this.setState(prevState => ({
-        clickedPoints: {
-          ...prevState.clickedPoints,
-          [prevState.currentMarker]: event.mapPoint
-        },
-        currentMarker: prevState.currentMarker + 1,
-        errors: {}
-      }), () => {
-        this.addPointMarker(event.mapPoint, this.state.currentMarker - 1);
+    if (event.mapPoint) {
+      // Clear existing graphics before adding new marker
+      if (this.state.mapView?.view) {
+        this.state.mapView.view.graphics.removeAll();
+      }
+
+      this.setState({
+        clickedPoint: event.mapPoint,
+        errors: {},
+        completedPolygons: {}
+      }, () => {
+        this.addPointMarker(event.mapPoint);
       });
     }
   };
-
   //#endregion
 
   //#region Utility Methods
-  // Gets color for marker from config or defaults
   private getMarkerColor = (markerNumber: number): number[] => {
     const defaultColors = {
       1: [51, 51, 204],  // Blue
@@ -104,20 +97,16 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
 
     return this.props.config?.polygonColors?.[`marker${markerNumber}`] ?? defaultColors[markerNumber];
   };
-
   //#endregion
 
   //#region Map Operations
-  // Adds a marker to the map
-  addPointMarker = (point: __esri.Point, markerNumber: number): void => {
+  addPointMarker = (point: __esri.Point): void => {
     if (this.state.mapView?.view) {
-      const color = this.getMarkerColor(markerNumber);
-
       const marker = new Graphic({
         geometry: point,
         symbol: new SimpleMarkerSymbol({
           style: "circle",
-          color: color,
+          color: this.getMarkerColor(1), // Use first color for marker
           outline: { color: [255, 255, 255], width: 2 },
           size: 12
         })
@@ -127,90 +116,83 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
     }
   };
 
-  // Generates drive time area polygon
-  generateDriveTimeArea = async (markerNumber: number) => {
-    const { mapView } = this.state;
-    if (!mapView?.view) return;
+  generateDriveTimeAreas = async () => {
+    const { mapView, clickedPoint, selectedTimes } = this.state;
+    if (!mapView?.view || !clickedPoint) return;
 
     try {
-      this.setState(prev => ({
-        isProcessing: { ...prev.isProcessing, [markerNumber]: true }
-      }));
-
+      this.setState({ isProcessing: true });
       const credential = await esriId.getCredential("https://www.arcgis.com/sharing/rest");
-      const point = this.state.clickedPoints[markerNumber];
-      const driveTime = this.state.selectedTimes[markerNumber];
-      
-      const params = new URLSearchParams({
-        f: "json",
-        facilities: JSON.stringify({
-          features: [{
-            geometry: {
-              x: point.x,
-              y: point.y,
-              spatialReference: mapView.view.spatialReference
-            }
-          }]
-        }),
-        defaultBreaks: [driveTime].toString(),
-        returnPolygons: "true",
-        outSR: mapView.view.spatialReference.wkid.toString(),
-        token: credential.token
-      });
 
-      const response = await fetch(
-        "https://route-api.arcgis.com/arcgis/rest/services/World/ServiceAreas/NAServer/ServiceArea_World/solveServiceArea?" + 
-        params.toString()
-      );
-
-      if (!response.ok) throw new Error('Network response was not ok');
-
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
-
-      if (data.saPolygons?.features?.[0]) {
-        const polygon = data.saPolygons.features[0].geometry;
-        const color = this.getMarkerColor(markerNumber);
-
-        const graphic = new Graphic({
-          geometry: new Polygon({
-            rings: polygon.rings,
-            spatialReference: mapView.view.spatialReference
+      // Generate all three polygons
+      for (let markerNumber = 1; markerNumber <= 3; markerNumber++) {
+        const driveTime = selectedTimes[markerNumber];
+        
+        const params = new URLSearchParams({
+          f: "json",
+          facilities: JSON.stringify({
+            features: [{
+              geometry: {
+                x: clickedPoint.x,
+                y: clickedPoint.y,
+                spatialReference: mapView.view.spatialReference
+              }
+            }]
           }),
-          symbol: new SimpleFillSymbol({
-            style: "solid",
-            color: [...color, 0.25],
-            outline: {
-              color: color,
-              width: 2
-            }
-          })
+          defaultBreaks: [driveTime].toString(),
+          returnPolygons: "true",
+          outSR: mapView.view.spatialReference.wkid.toString(),
+          token: credential.token
         });
 
-        mapView.view.graphics.add(graphic);
-      }
+        const response = await fetch(
+          "https://route-api.arcgis.com/arcgis/rest/services/World/ServiceAreas/NAServer/ServiceArea_World/solveServiceArea?" + 
+          params.toString()
+        );
 
+        if (!response.ok) throw new Error('Network response was not ok');
+
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+
+        if (data.saPolygons?.features?.[0]) {
+          const polygon = data.saPolygons.features[0].geometry;
+          const color = this.getMarkerColor(markerNumber);
+
+          const graphic = new Graphic({
+            geometry: new Polygon({
+              rings: polygon.rings,
+              spatialReference: mapView.view.spatialReference
+            }),
+            symbol: new SimpleFillSymbol({
+              style: "solid",
+              color: [...color, 0.25],
+              outline: {
+                color: color,
+                width: 2
+              }
+            })
+          });
+
+          mapView.view.graphics.add(graphic);
+          // Mark this polygon as completed
+          this.setState(prev => ({
+            completedPolygons: {
+              ...prev.completedPolygons,
+              [markerNumber]: true
+            }
+          }));
+        }
+      }
     } catch (error) {
-      this.setState(prev => ({
-        errors: { 
-          ...prev.errors, 
-          [markerNumber]: error.message 
-        }
-      }));
+      this.setState({
+        errors: { general: error.message }
+      });
     } finally {
-      this.setState(prev => ({
-        isProcessing: { 
-          ...prev.isProcessing, 
-          [markerNumber]: false 
-        }
-      }));
+      this.setState({ isProcessing: false });
     }
   };
 
-  // Handles drive time input changes
-  //#endregion
-
-  //#region UI Event Handlers
   handleTimeChange = (value: number, markerNumber: number): void => {
     const maxTime = this.props.config?.maxDriveTime ?? 15;
     const boundedValue = Math.min(Math.max(value, 1), maxTime);
@@ -221,12 +203,11 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
       }
     }));
   };
-
   //#endregion
 
   render(): React.ReactNode {
     const { useMapWidgetIds, config } = this.props;
-    const { clickedPoints, isProcessing, errors, selectedTimes } = this.state;
+    const { clickedPoint, isProcessing, errors, selectedTimes, completedPolygons } = this.state;
 
     return (
       <div css={css`
@@ -262,7 +243,7 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
           color: #444;
         }
         
-        .marker-controls {
+        .time-controls {
           border: 1px solid #e9ecef;
           padding: 16px;
           margin-bottom: 16px;
@@ -273,15 +254,6 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
           &:hover {
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
             transform: translateY(-1px);
-          }
-          
-          h3 {
-            font-size: 1.1em;
-            margin-bottom: 12px;
-            color: #2c3e50;
-            display: flex;
-            align-items: center;
-            gap: 8px;
           }
         }
         
@@ -319,6 +291,8 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
           padding: 8px 16px;
           border-radius: 4px;
           transition: all 0.2s ease;
+          width: 100%;
+          margin-top: 16px;
           
           &:hover:not(:disabled) {
             background-color: #0b5ed7;
@@ -364,55 +338,60 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
 
         <div className="controls">
           <div className="instructions">
-            Click on the map to place up to 3 markers for drive time analysis
+            Click on the map to place a marker, then configure drive times and generate service areas
           </div>
 
-          {[1, 2, 3].map(markerNum => {
-            const color = this.getMarkerColor(markerNum);
-            return (
-              <div 
-                key={markerNum} 
-                className="marker-controls" 
-                style={{ 
-                  borderColor: `rgba(${color.join(',')}, 0.3)`,
-                  borderLeft: `4px solid rgb(${color.join(',')})` 
-                }}
-              >
-                <h3>
-                  Marker {markerNum}
-                  {clickedPoints[markerNum] ? 
-                    <span style={{color: 'green'}}>✓</span> : 
-                    <span style={{color: '#6c757d'}}>(click map)</span>
-                  }
-                </h3>
-
-                <div className="time-input">
+          <div className="time-controls">
+            {[1, 2, 3].map(markerNum => {
+              const color = this.getMarkerColor(markerNum);
+              return (
+                <div 
+                  key={markerNum} 
+                  className="time-input"
+                  style={{ 
+                    borderLeft: `4px solid rgb(${color.join(',')})`, 
+                    paddingLeft: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between'
+                  }}
+                >
                   <NumericInput
                     min={1}
                     max={config?.maxDriveTime ?? 15}
                     value={selectedTimes[markerNum]}
                     onChange={value => this.handleTimeChange(value, markerNum)}
-                    disabled={!clickedPoints[markerNum]}
                   />
                   <span>minutes</span>
+                  {completedPolygons[markerNum] && (
+                    <span style={{ 
+                      color: 'green', 
+                      marginLeft: '8px', 
+                      fontSize: '1.2em',
+                      display: 'flex',
+                      alignItems: 'center'
+                    }}>
+                      ✓
+                    </span>
+                  )}
                 </div>
+              );
+            })}
 
-                <Button
-                  onClick={() => this.generateDriveTimeArea(markerNum)}
-                  disabled={!clickedPoints[markerNum] || isProcessing[markerNum]}
-                >
-                  {isProcessing[markerNum] ? 
-                    'Calculating...' : 
-                    'Generate Drive Time Area'
-                  }
-                </Button>
+            <Button
+              onClick={this.generateDriveTimeAreas}
+              disabled={!clickedPoint || isProcessing}
+            >
+              {isProcessing ? 
+                'Calculating Drive Time Areas...' : 
+                'Generate Drive Time Areas'
+              }
+            </Button>
 
-                {errors[markerNum] && (
-                  <div className="error">{errors[markerNum]}</div>
-                )}
-              </div>
-            );
-          })}
+            {errors.general && (
+              <div className="error">{errors.general}</div>
+            )}
+          </div>
         </div>
       </div>
     );
