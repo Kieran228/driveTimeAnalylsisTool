@@ -83,7 +83,7 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
     handleMapClick = (event: any) => {
         if (event.mapPoint) {
             if (this.state.mapView?.view) {
-                this.state.mapView.view.graphics.removeAll;
+                this.state.mapView.view.graphics.removeAll();
             }
 
             //? update the state with a new point and reset the status
@@ -235,7 +235,9 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
         }));
     };
 
-    render(): React.ReactNode {
+    render(): React.ReactNode {                                                                //? typescript type annotation, specify what type of
+                                                                                               //? render method to return. react.node means anything
+                                                                                               //? react can render
 
         const { useMapWidgetIds, config } = this.props;
         const { clickedPoint, isProcessing, errors, selectedTimes, completedPolygons } = this.state;
@@ -354,13 +356,16 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
                 }
             `}>
 
-                {config?.widgetTitle && (
+                {config?.widgetTitle && (                                                   //? if config exist, and if widgetTitle exist in the config,
+                                                                                            //? create a class with this data 
                     <div className="widget-title">
                         {config.widgetTitle}
                     </div>
                 )}
 
-                {useMapWidgetIds?.length > 0 ? (
+                {useMapWidgetIds?.length > 0 ? (                                            //? if useMapWidgetIds array exist, and the length is more
+                                                                                            //? than 1
+                                                                                            //? load the map component from Exb, the first map in the array. calls our method on the event listener
                     <JimuMapViewComponent
                         useMapWidgetId={useMapWidgetIds[0]}
                         onActiveViewChange={this.activeViewChangeHandler}
@@ -375,14 +380,18 @@ export default class DriveTimeWidget extends React.PureComponent<AllWidgetProps<
                     </div>
 
                     <div className="time-controls">
-                        {[1, 2, 3].map(markerNum => {
+                        {[1, 2, 3].map(markerNum => {                                                    //? we loop through an array of 3 numbers
+                                                                                                         //? markerNumber receives each value, then
+                                                                                                         //? we use that number to create and customize
                             const color = this.getMarkerColor(markerNum);
+
                             return (
                                 <div
                                     key={markerNum}
                                     className="time-input"
                                     style={{
-                                        borderLeft: `4px solid rgb(${color.join(',')})`,
+                                        borderLeft: `4px solid rgb(${color.join(',')})`,                 //? takes the color array and converts to string
+                                                                                                         //? values seperated by commas so CSS will acknowledge the values
                                         paddingLeft: '6px',
                                         display: 'flex',
                                         alignItems: 'center',
